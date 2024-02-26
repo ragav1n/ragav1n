@@ -4,6 +4,8 @@
 - C++
 > OOP
 
+- C
+
 - Python
 > Machine Learning
 
