@@ -28,7 +28,7 @@ OUT = HERE.parent / "assets"
 W, H = 1280, 260
 SEED = 20260810
 
-TAGLINE = "security · systems · detection"
+TAGLINE = "security · systems"
 
 COLS, ROWS = 340, 84
 BUMPS = 15
@@ -316,7 +316,8 @@ def render(theme_name):
         f'<svg xmlns="http://www.w3.org/2000/svg" '
         f'xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 {W} {H}" '
         f'width="{W}" height="{H}" role="img" '
-        f'aria-label="Ragav. Security, systems, detection.">'
+        # Derived from TAGLINE so the two cannot drift apart.
+        f'aria-label="Ragav. {TAGLINE.replace(" · ", ", ").capitalize()}.">'
         f"{''.join(body)}</svg>"
     )
 

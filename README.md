@@ -1,13 +1,9 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
-  <img alt="Ragav. Security, systems, detection." src="assets/banner-light.svg" width="900">
+  <img alt="Ragav. Security, systems." src="assets/banner-light.svg" width="900">
 </picture>
 
 I create tools that run on your own machine.
-
-Most of my time goes to [threat-intel](https://github.com/ragav1n/threat-intel), an IOC pipeline
-that keeps report data on the host, and [ink2digital](https://github.com/ragav1n/ink2digital),
-which turns handwritten German lecture slides into typeset LaTeX.
 
 ### Work
 
