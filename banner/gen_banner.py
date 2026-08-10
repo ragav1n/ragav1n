@@ -158,12 +158,14 @@ def render(theme_name):
         f'fill="{c["ink"]}" opacity="0.22"/>'
     )
 
+    # GitHub renders a profile README in a 666px column, so this 1280-wide
+    # canvas lands at roughly half scale. The tagline is sized for that.
     tagline, _ = outline(
         mono,
         "security · systems · local-first",
-        size=15,
-        origin=(left + 2, 218),
-        tracking=0.16,
+        size=20,
+        origin=(left + 2, 222),
+        tracking=0.14,
         fill=c["muted"],
     )
     body.append(tagline)
