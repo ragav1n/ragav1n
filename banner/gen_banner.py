@@ -2,8 +2,11 @@
 
 GitHub serves README images through an <img> tag, which cannot fetch web fonts.
 Live <text> would fall back to a different face on every OS, so every glyph here
-is outlined to a path. The constellation is seeded, so re-running this produces
-byte-identical output.
+is outlined to a path.
+
+The artwork is a topographic contour field: a seeded sum of Gaussian bumps,
+traced at fixed heights with marching squares. Everything is deterministic, so
+re-running this produces byte-identical output.
 
     python3 gen_banner.py
 
@@ -25,19 +28,18 @@ OUT = HERE.parent / "assets"
 W, H = 1280, 260
 SEED = 20260810
 
-# The constellation echoes the knowledge graph inside threat-intel. It runs off
-# the top and bottom crop so it reads as a field the banner cuts into, rather
-# than a blob floating in the middle of the page.
-FIELD_X0, FIELD_X1 = 452, W + 40
-FIELD_Y0, FIELD_Y1 = -34, H + 34
-NODE_COUNT = 52
-MIN_GAP = 38
-NEIGHBOURS = 2
-MAX_LINK = 132
+TAGLINE = "security · systems · detection"
+
+COLS, ROWS = 340, 84
+BUMPS = 15
+# Every third contour is drawn heavier, the way an index contour is on a real
+# topographic map.
+LEVELS = [round(-0.96 + i * 0.12, 3) for i in range(17)]
+INDEX_EVERY = 3
 
 THEMES = {
-    "light": {"ink": "#0b0d10", "muted": "#5b6570", "accent": "#0f7d8f", "edge": "#7d8b96"},
-    "dark": {"ink": "#e8eef4", "muted": "#8b949e", "accent": "#4cc3d9", "edge": "#5f7280"},
+    "light": {"ink": "#0b0d10", "muted": "#5b6570", "line": "#4a5560", "accent": "#0f7d8f"},
+    "dark": {"ink": "#e8eef4", "muted": "#8b949e", "line": "#9fb0bd", "accent": "#4cc3d9"},
 }
 
 
@@ -48,7 +50,7 @@ def load(name, axes=None):
     return font
 
 
-def outline(font, text, size, origin, tracking=0.0, fill="#000", opacity=None):
+def outline(font, text, size, origin, tracking=0.0, fill="#000"):
     """Lay out text as outlined paths, letterspaced by `tracking` em."""
     upem = font["head"].unitsPerEm
     cmap = font.getBestCmap()
@@ -73,77 +75,223 @@ def outline(font, text, size, origin, tracking=0.0, fill="#000", opacity=None):
         pen_x += hmtx[name][0] + step
 
     width = (pen_x - step) * scale
-    attrs = f' fill="{fill}"'
-    if opacity is not None:
-        attrs += f' opacity="{opacity}"'
     # Fonts draw y-up, SVG draws y-down, so the group flips the axis.
     group = (
         f'<g transform="translate({origin[0]} {origin[1]}) scale({scale:.6f} {-scale:.6f})"'
-        f'{attrs}>{"".join(parts)}</g>'
+        f' fill="{fill}">{"".join(parts)}</g>'
     )
     return group, width
 
 
-def smoothstep(a, b, x):
-    if a == b:
-        return 0.0 if x < a else 1.0
-    t = min(1.0, max(0.0, (x - a) / (b - a)))
-    return t * t * (3 - 2 * t)
+def build_grid(rng):
+    """Sample a sum of Gaussian bumps over the canvas.
 
-
-def falloff(x, y):
-    """Thin the field out to nothing before the right crop.
-
-    Only the last few pixels of the top and bottom soften, so nodes run off
-    those edges instead of curving into an oval.
+    Distances are measured in units of the canvas height so the contours come
+    out round rather than smeared across the 4.9:1 canvas.
     """
-    fx = smoothstep(FIELD_X0, FIELD_X0 + 300, x) * (1 - smoothstep(W - 178, W + 8, x))
-    fy = smoothstep(-30, 16, y) * (1 - smoothstep(H - 16, H + 30, y))
-    return fx * fy
+    aspect = W / H
+    # Weighted to the right, since the mask hides everything under the wordmark.
+    bumps = [
+        (
+            rng.uniform(1.05, aspect + 0.40),
+            rng.uniform(-0.30, 1.30),
+            rng.uniform(0.17, 0.46),
+            rng.choice((-1, 1)) * rng.uniform(0.65, 1.15),
+        )
+        for _ in range(BUMPS)
+    ]
+
+    grid = []
+    for j in range(ROWS + 1):
+        y = j / ROWS
+        row = []
+        for i in range(COLS + 1):
+            x = (i / COLS) * aspect
+            total = 0.0
+            for cx, cy, radius, amp in bumps:
+                d2 = (x - cx) ** 2 + (y - cy) ** 2
+                total += amp * math.exp(-d2 / (2 * radius * radius))
+            row.append(total)
+        grid.append(row)
+    return grid
 
 
-def build_field(rng):
-    nodes = []
-    attempts = 0
-    while len(nodes) < NODE_COUNT and attempts < NODE_COUNT * 400:
-        attempts += 1
-        x = rng.uniform(FIELD_X0, FIELD_X1)
-        y = rng.uniform(FIELD_Y0, FIELD_Y1)
-        if falloff(x, y) < 0.05:
-            continue
-        if any((x - nx) ** 2 + (y - ny) ** 2 < MIN_GAP**2 for nx, ny, _ in nodes):
-            continue
-        nodes.append((x, y, rng.random()))
+def _interp(p1, v1, p2, v2, level):
+    if abs(v2 - v1) < 1e-12:
+        t = 0.5
+    else:
+        t = (level - v1) / (v2 - v1)
+    return (p1[0] + (p2[0] - p1[0]) * t, p1[1] + (p2[1] - p1[1]) * t)
 
-    # Linking each node to its nearest few neighbours draws a graph. Linking
-    # everything inside a radius draws a mesh, which reads as noise.
-    seen, edges = set(), []
-    for i, (x1, y1, _) in enumerate(nodes):
-        near = sorted(
-            ((math.hypot(x2 - x1, y2 - y1), j) for j, (x2, y2, _) in enumerate(nodes) if j != i)
-        )[:NEIGHBOURS]
-        for dist, j in near:
-            if dist > MAX_LINK:
+
+def march(grid, level):
+    """Marching squares. Returns unordered segments at the given height."""
+    segments = []
+    for j in range(ROWS):
+        for i in range(COLS):
+            x0, x1 = i / COLS * W, (i + 1) / COLS * W
+            y0, y1 = j / ROWS * H, (j + 1) / ROWS * H
+            v00, v10 = grid[j][i], grid[j][i + 1]
+            v11, v01 = grid[j + 1][i + 1], grid[j + 1][i]
+
+            case = (
+                (1 if v00 >= level else 0)
+                | (2 if v10 >= level else 0)
+                | (4 if v11 >= level else 0)
+                | (8 if v01 >= level else 0)
+            )
+            if case in (0, 15):
                 continue
-            key = (min(i, j), max(i, j))
-            if key in seen:
-                continue
-            seen.add(key)
-            edges.append((x1, y1, nodes[j][0], nodes[j][1], dist))
 
-    hubs = sorted(nodes, key=lambda n: -falloff(n[0], n[1]))[:2]
-    return nodes, edges, hubs
+            top = _interp((x0, y0), v00, (x1, y0), v10, level)
+            right = _interp((x1, y0), v10, (x1, y1), v11, level)
+            bottom = _interp((x0, y1), v01, (x1, y1), v11, level)
+            left = _interp((x0, y0), v00, (x0, y1), v01, level)
+
+            if case in (1, 14):
+                segments.append((left, top))
+            elif case in (2, 13):
+                segments.append((top, right))
+            elif case in (3, 12):
+                segments.append((left, right))
+            elif case in (4, 11):
+                segments.append((right, bottom))
+            elif case in (6, 9):
+                segments.append((top, bottom))
+            elif case in (7, 8):
+                segments.append((left, bottom))
+            elif case == 5:
+                segments.append((left, top))
+                segments.append((right, bottom))
+            elif case == 10:
+                segments.append((top, right))
+                segments.append((left, bottom))
+    return segments
+
+
+def chain(segments):
+    """Join loose segments into polylines so each contour is one path."""
+    key = lambda p: (round(p[0], 3), round(p[1], 3))
+    ends = {}
+    for idx, (a, b) in enumerate(segments):
+        ends.setdefault(key(a), []).append(idx)
+        ends.setdefault(key(b), []).append(idx)
+
+    used = [False] * len(segments)
+    paths = []
+
+    for start in range(len(segments)):
+        if used[start]:
+            continue
+        used[start] = True
+        a, b = segments[start]
+        line = [a, b]
+
+        # Walk forward from the tail, then backward from the head.
+        for direction in (0, 1):
+            while True:
+                tip = line[-1] if direction == 0 else line[0]
+                nxt = None
+                for idx in ends.get(key(tip), ()):
+                    if used[idx]:
+                        continue
+                    p, q = segments[idx]
+                    if key(p) == key(tip):
+                        nxt, point = idx, q
+                        break
+                    if key(q) == key(tip):
+                        nxt, point = idx, p
+                        break
+                if nxt is None:
+                    break
+                used[nxt] = True
+                if direction == 0:
+                    line.append(point)
+                else:
+                    line.insert(0, point)
+
+        if len(line) > 3:
+            paths.append(line)
+    return paths
+
+
+def to_d(points):
+    """Emit a path, dropping points too close together to see."""
+    out = [f"M{points[0][0]:.1f} {points[0][1]:.1f}"]
+    lx, ly = points[0]
+    for x, y in points[1:]:
+        if abs(x - lx) < 1.4 and abs(y - ly) < 1.4:
+            continue
+        out.append(f"L{x:.1f} {y:.1f}")
+        lx, ly = x, y
+    return "".join(out)
 
 
 def render(theme_name):
     c = THEMES[theme_name]
     rng = random.Random(SEED)
-    nodes, edges, hubs = build_field(rng)
+    grid = build_grid(rng)
 
     grotesk = load("SpaceGroteskVF.ttf", {"wght": 500})
     mono = load("JetBrainsMono.ttf")
 
-    body = []
+    # The contours run under the whole canvas and a gradient mask dissolves them
+    # before they reach the wordmark or the right crop. A second, narrower mask
+    # sweeps a band of accent colour across the same paths, which is the only
+    # moving part of the banner.
+    defs = (
+        "<defs>"
+        '<linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">'
+        '<stop offset="0" stop-color="#fff" stop-opacity="0"/>'
+        '<stop offset="0.30" stop-color="#fff" stop-opacity="0"/>'
+        '<stop offset="0.56" stop-color="#fff" stop-opacity="1"/>'
+        '<stop offset="0.88" stop-color="#fff" stop-opacity="1"/>'
+        '<stop offset="1" stop-color="#fff" stop-opacity="0"/>'
+        "</linearGradient>"
+        f'<mask id="fadeout"><rect width="{W}" height="{H}" fill="url(#fade)"/></mask>'
+        '<linearGradient id="band" x1="0" y1="0" x2="1" y2="0">'
+        '<stop offset="0" stop-color="#fff" stop-opacity="0"/>'
+        '<stop offset="0.5" stop-color="#fff" stop-opacity="1"/>'
+        '<stop offset="1" stop-color="#fff" stop-opacity="0"/>'
+        "</linearGradient>"
+        # SMIL rather than a CSS keyframe: an SVG loaded through <img> renders in
+        # a restricted mode, and SMIL is the animation that reliably plays there.
+        f'<mask id="sweep"><rect class="band" x="-320" y="0" width="300" height="{H}" '
+        'fill="url(#band)">'
+        f'<animate attributeName="x" dur="9s" repeatCount="indefinite" '
+        f'calcMode="linear" keyTimes="0;0.58;1" values="-320;{W + 40};{W + 40}"/>'
+        "</rect></mask>"
+        "</defs>"
+        # CSS cannot stop SMIL, but hiding the band empties the mask, which
+        # leaves the contours static for anyone who asked for less motion.
+        "<style>@media (prefers-reduced-motion:reduce){.band{display:none}}</style>"
+    )
+
+    heavy, light = [], []
+    for n, level in enumerate(LEVELS):
+        target = heavy if n % INDEX_EVERY == 0 else light
+        for line in chain(march(grid, level)):
+            target.append(f'<path d="{to_d(line)}"/>')
+
+    contours = heavy + light
+    # Each contour is defined once and drawn twice by reference: dim underneath,
+    # accent inside the sweep band. Repeating the path data would double the file.
+    shapes = (
+        f'<g id="ridge" stroke-width="1.15">{"".join(heavy)}</g>'
+        f'<g id="minor" stroke-width="0.75">{"".join(light)}</g>'
+    )
+
+    def draw(stroke, a, b):
+        return (
+            f'<use href="#ridge" xlink:href="#ridge" stroke="{stroke}" opacity="{a}"/>'
+            f'<use href="#minor" xlink:href="#minor" stroke="{stroke}" opacity="{b}"/>'
+        )
+
+    body = [
+        defs.replace("</defs>", shapes + "</defs>"),
+        f'<g fill="none" mask="url(#fadeout)">{draw(c["line"], 0.5, 0.3)}'
+        f'<g mask="url(#sweep)">{draw(c["accent"], 0.95, 0.8)}</g></g>',
+    ]
 
     # The banner scales to the width of the README column, so the wordmark sits
     # near x=0 to share a left edge with the body text underneath it.
@@ -152,7 +300,6 @@ def render(theme_name):
         grotesk, "RAGAV", size=96, origin=(left, 152), tracking=0.15, fill=c["ink"]
     )
     body.append(wordmark)
-
     body.append(
         f'<rect x="{left + 2}" y="186" width="{mark_w - 4:.0f}" height="1" '
         f'fill="{c["ink"]}" opacity="0.22"/>'
@@ -161,53 +308,15 @@ def render(theme_name):
     # GitHub renders a profile README in a 666px column, so this 1280-wide
     # canvas lands at roughly half scale. The tagline is sized for that.
     tagline, _ = outline(
-        mono,
-        "security · systems · local-first",
-        size=20,
-        origin=(left + 2, 222),
-        tracking=0.14,
-        fill=c["muted"],
+        mono, TAGLINE, size=20, origin=(left + 2, 222), tracking=0.14, fill=c["muted"]
     )
     body.append(tagline)
 
-    for x1, y1, x2, y2, dist in edges:
-        a = min(falloff(x1, y1), falloff(x2, y2))
-        a *= 1 - (dist / MAX_LINK) * 0.5
-        a *= 0.42
-        if a < 0.015:
-            continue
-        body.append(
-            f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
-            f'stroke="{c["edge"]}" stroke-width="0.85" opacity="{a:.3f}"/>'
-        )
-
-    for x, y, jitter in nodes:
-        a = falloff(x, y)
-        if a < 0.03:
-            continue
-        r = 1.5 + jitter * 1.7
-        warm = jitter > 0.72
-        body.append(
-            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r:.2f}" '
-            f'fill="{c["accent"] if warm else c["ink"]}" '
-            f'opacity="{a * (0.9 if warm else 0.55):.3f}"/>'
-        )
-
-    for x, y, _ in hubs:
-        a = falloff(x, y)
-        body.append(
-            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="9.5" fill="none" '
-            f'stroke="{c["accent"]}" stroke-width="1" opacity="{a * 0.5:.3f}"/>'
-        )
-        body.append(
-            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.1" '
-            f'fill="{c["accent"]}" opacity="{a * 0.95:.3f}"/>'
-        )
-
     svg = (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 {W} {H}" '
         f'width="{W}" height="{H}" role="img" '
-        f'aria-label="Ragav. Security, systems, local-first.">'
+        f'aria-label="Ragav. Security, systems, detection.">'
         f"{''.join(body)}</svg>"
     )
 
@@ -215,7 +324,7 @@ def render(theme_name):
     path = OUT / f"banner-{theme_name}.svg"
     path.write_text(svg, encoding="utf-8")
     print(f"{path.relative_to(HERE.parent)}  {len(svg) / 1024:.1f} KB  "
-          f"{len(nodes)} nodes  {len(edges)} edges  wordmark {mark_w:.0f}px")
+          f"{len(contours)} contour paths  wordmark {mark_w:.0f}px")
 
 
 if __name__ == "__main__":

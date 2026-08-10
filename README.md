@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
-  <img alt="Ragav. Security, systems, local-first." src="assets/banner-light.svg" width="900">
+  <img alt="Ragav. Security, systems, detection." src="assets/banner-light.svg" width="900">
 </picture>
 
 I create tools that run on your own machine.
